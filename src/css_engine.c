@@ -140,7 +140,9 @@ void css_engine_get_style(lxb_dom_element_t *el, ComputedStyle *out)
     out->flex_shrink = 1.0f;
     out->width = -1.0f;
     out->height = -1.0f;
+    out->width_pct = -1.0f;
     out->max_width = -1.0f;
+    out->max_width_pct = -1.0f;
 
     if (!el) return;
 
@@ -201,10 +203,26 @@ void css_engine_get_style(lxb_dom_element_t *el, ComputedStyle *out)
     if (mb) { float v = length_perc_to_px(mb, 0, fs); if (v >= 0) { out->margin_bottom = v; out->has_margin_bottom = 1; } }
 
     const void *ml = lxb_dom_element_css_property_by_id(el, LXB_CSS_PROPERTY_MARGIN_LEFT);
-    if (ml) { float v = length_perc_to_px(ml, 0, fs); if (v >= 0) { out->margin_left = v; out->has_margin_left = 1; } }
+    if (ml) {
+        const lxb_css_value_length_percentage_t *mlp = ml;
+        if (mlp->type == LXB_CSS_VALUE_AUTO) {
+            out->margin_left_auto = 1; out->has_margin_left = 1;
+        } else {
+            float v = length_perc_to_px(ml, 0, fs);
+            if (v >= 0) { out->margin_left = v; out->has_margin_left = 1; }
+        }
+    }
 
     const void *mr = lxb_dom_element_css_property_by_id(el, LXB_CSS_PROPERTY_MARGIN_RIGHT);
-    if (mr) { float v = length_perc_to_px(mr, 0, fs); if (v >= 0) { out->margin_right = v; out->has_margin_right = 1; } }
+    if (mr) {
+        const lxb_css_value_length_percentage_t *mrp = mr;
+        if (mrp->type == LXB_CSS_VALUE_AUTO) {
+            out->margin_right_auto = 1; out->has_margin_right = 1;
+        } else {
+            float v = length_perc_to_px(mr, 0, fs);
+            if (v >= 0) { out->margin_right = v; out->has_margin_right = 1; }
+        }
+    }
 
     /* Paddings */
     const void *pt = lxb_dom_element_css_property_by_id(el, LXB_CSS_PROPERTY_PADDING_TOP);
@@ -288,8 +306,14 @@ void css_engine_get_style(lxb_dom_element_t *el, ComputedStyle *out)
 
     const void *wp = lxb_dom_element_css_property_by_id(el, LXB_CSS_PROPERTY_WIDTH);
     if (wp) {
-        float v = length_perc_to_px(wp, 0, fs);
-        if (v >= 0) { out->width = v; out->has_width = 1; }
+        const lxb_css_value_length_percentage_t *wlp = wp;
+        if (wlp->type == LXB_CSS_VALUE__PERCENTAGE) {
+            out->width_pct = (float)wlp->u.percentage.num;
+            out->has_width = 1;
+        } else {
+            float v = length_perc_to_px(wp, 0, fs);
+            if (v >= 0) { out->width = v; out->has_width = 1; }
+        }
     }
 
     const void *hp = lxb_dom_element_css_property_by_id(el, LXB_CSS_PROPERTY_HEIGHT);
@@ -300,8 +324,14 @@ void css_engine_get_style(lxb_dom_element_t *el, ComputedStyle *out)
 
     const void *mwp = lxb_dom_element_css_property_by_id(el, LXB_CSS_PROPERTY_MAX_WIDTH);
     if (mwp) {
-        float v = length_perc_to_px(mwp, 0, fs);
-        if (v >= 0) { out->max_width = v; out->has_max_width = 1; }
+        const lxb_css_value_length_percentage_t *mwlp = mwp;
+        if (mwlp->type == LXB_CSS_VALUE__PERCENTAGE) {
+            out->max_width_pct = (float)mwlp->u.percentage.num;
+            out->has_max_width = 1;
+        } else {
+            float v = length_perc_to_px(mwp, 0, fs);
+            if (v >= 0) { out->max_width = v; out->has_max_width = 1; }
+        }
     }
 
     /* ---- Text-Align ---- */

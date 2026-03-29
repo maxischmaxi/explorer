@@ -24,7 +24,9 @@ typedef struct {
     float flex_basis;        /* -1 = auto */
     /* Sizing */
     float width, height;     /* -1 = auto */
+    float width_pct;         /* -1 = nicht gesetzt, sonst 0..100 */
     float max_width;         /* -1 = none */
+    float max_width_pct;     /* -1 = nicht gesetzt */
     /* Text */
     int   text_align;        /* 0=left, 1=right, 2=center, 3=justify */
     int   text_decoration;   /* Bitmask: 1=underline, 2=line-through, 4=overline */
@@ -36,6 +38,7 @@ typedef struct {
     /* Has-Flags */
     int   has_color;
     int   has_bg;
+    int   margin_left_auto, margin_right_auto;
     int   has_margin_top, has_margin_bottom, has_margin_left, has_margin_right;
     int   has_padding_top, has_padding_bottom, has_padding_left, has_padding_right;
     int   has_font_size;

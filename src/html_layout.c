@@ -424,8 +424,13 @@ static void layout_flex(LayoutCtx *ctx, lxb_dom_node_t *container,
                 fi->shrink = ccss.has_flex_shrink ? ccss.flex_shrink : 1;
                 fi->cross_size = 0;
 
+                /* width als Basis wenn kein flex-basis */
                 if (ccss.has_flex_basis && ccss.flex_basis >= 0) {
                     fi->basis = ccss.flex_basis;
+                } else if (ccss.has_width && ccss.width >= 0) {
+                    fi->basis = ccss.width;
+                } else if (ccss.has_width && ccss.width_pct >= 0) {
+                    fi->basis = avail_main * ccss.width_pct / 100.0f;
                 } else {
                     float cross = 0;
                     fi->basis = measure_intrinsic(ctx, child,
@@ -699,6 +704,8 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
     if (tag == LXB_TAG_PRE) n_in_pre = 1;
 
     /* CSS text-decoration + text-align + font-scale in Kontext vererben */
+    int old_text_decoration = ctx->text_decoration;
+    float old_font_scale = ctx->font_scale;
     if (css.has_text_decoration) ctx->text_decoration = css.text_decoration;
     if (css.has_text_align) ctx->text_align = css.text_align;
     if (css.has_font_size || style.font_scale != 1.0f)
@@ -801,6 +808,8 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
     if (disp == DISP_FLEX) {
         layout_flex(ctx, node, &style, &css, nr, ng, nb,
                     n_is_link, n_href, n_in_pre, right_edge);
+        ctx->font_scale = old_font_scale;
+        ctx->text_decoration = old_text_decoration;
         free(a_href_alloc);
         return;
     }
@@ -828,11 +837,38 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
         float new_right = right_edge;
 
         /* CSS width begrenzt die rechte Kante */
-        if (css.has_width && css.width >= 0)
-            new_right = ctx->block_start_x + css.width;
-        if (css.has_max_width && css.max_width >= 0) {
-            float max_r = ctx->block_start_x + css.max_width;
-            if (max_r < new_right) new_right = max_r;
+        float parent_w = right_edge - old_block_x;
+        float block_width = right_edge - ctx->block_start_x;
+
+        if (css.has_width) {
+            float w = css.width;
+            if (css.width_pct >= 0)
+                w = parent_w * css.width_pct / 100.0f;
+            if (w >= 0) {
+                block_width = w;
+                new_right = ctx->block_start_x + w;
+            }
+        }
+        if (css.has_max_width) {
+            float mw = css.max_width;
+            if (css.max_width_pct >= 0)
+                mw = parent_w * css.max_width_pct / 100.0f;
+            if (mw >= 0 && mw < block_width) {
+                block_width = mw;
+                new_right = ctx->block_start_x + mw;
+            }
+        }
+
+        /* margin: auto — Zentrierung */
+        if (css.margin_left_auto && css.margin_right_auto &&
+            (css.has_width || css.has_max_width)) {
+            float avail = right_edge - old_block_x;
+            float offset = (avail - block_width) * 0.5f;
+            if (offset > 0) {
+                ctx->block_start_x = old_block_x + offset;
+                ctx->cursor_x = ctx->block_start_x;
+                new_right = ctx->block_start_x + block_width;
+            }
         }
 
         /* Border zeichnen */
@@ -947,6 +983,8 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
         ctx->cursor_x = ctx->block_start_x;
         right_edge = old_right;
 
+        ctx->font_scale = old_font_scale;
+        ctx->text_decoration = old_text_decoration;
         free(a_href_alloc);
         return;
     }
@@ -954,6 +992,8 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
     /* ---- Inline-Elemente ---- */
 
     layout_children(ctx, node, nr, ng, nb, n_is_link, n_href, n_in_pre, right_edge);
+    ctx->font_scale = old_font_scale;
+    ctx->text_decoration = old_text_decoration;
     free(a_href_alloc);
 }
 

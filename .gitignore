@@ -5,3 +5,5 @@ build/
 *.jpg
 *.core
 core
+screenshots/
+tools/mcp-screenshot/node_modules/

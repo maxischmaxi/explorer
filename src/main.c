@@ -17,6 +17,7 @@
 #include "image_cache.h"
 #include "fetch_manager.h"
 #include "css_engine.h"
+#include "debug_server.h"
 #include <lexbor/html/html.h>
 
 #define WINDOW_TITLE  "Explorer Browser"
@@ -425,8 +426,16 @@ static void framebuffer_size_callback(GLFWwindow *window, int width, int height)
     glViewport(0, 0, width, height);
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
+    int debug_port = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--debug-port") == 0 && i + 1 < argc) {
+            debug_port = atoi(argv[++i]);
+        }
+    }
+
     glfwSetErrorCallback(error_callback);
 
     if (!glfwInit()) {
@@ -480,6 +489,11 @@ int main(void)
     js = js_engine_create();
     if (!js)
         fprintf(stderr, "Warning: Failed to create JS engine\n");
+
+    if (debug_port > 0) {
+        if (debug_server_start(debug_port) != 0)
+            fprintf(stderr, "Warning: Failed to start debug server on port %d\n", debug_port);
+    }
 
     update_content_width(win_w);
 
@@ -546,6 +560,9 @@ int main(void)
 
         glfwSwapBuffers(window);
 
+        /* Debug-Server pollen (nach SwapBuffers fuer aktuelle Pixel) */
+        debug_server_poll();
+
         /* Paralleles Resource-Fetching */
         int prev_count = resources.count;
         int remaining = fetch_manager_poll(&resources);
@@ -588,6 +605,7 @@ int main(void)
         }
     }
 
+    debug_server_stop();
     js_engine_destroy(js);
     fetch_manager_cleanup();
     resource_collection_free(&resources);

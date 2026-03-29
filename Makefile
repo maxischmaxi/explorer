@@ -16,7 +16,7 @@ TARGET    = $(BUILD_DIR)/explorer
 SRCS = $(wildcard $(SRC_DIR)/*.c)
 OBJS = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRCS))
 
-.PHONY: all clean run
+.PHONY: all clean run dev
 
 all: $(TARGET)
 
@@ -31,6 +31,9 @@ $(BUILD_DIR):
 
 run: $(TARGET)
 	./$(TARGET)
+
+dev: $(TARGET)
+	./$(TARGET) --debug-port 9222
 
 clean:
 	rm -rf $(BUILD_DIR)

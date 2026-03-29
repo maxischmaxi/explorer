@@ -22,9 +22,28 @@ static int        count;
 const CachedImage *image_cache_get(const char *url)
 {
     if (!url) return NULL;
+    size_t url_len = strlen(url);
+
     for (int i = 0; i < count; i++) {
+        /* Exakter Match */
         if (strcmp(entries[i].url, url) == 0)
             return &entries[i].img;
+    }
+
+    /* Suffix-Match: "/images/logo.png" matcht "https://example.com/images/logo.png" */
+    for (int i = 0; i < count; i++) {
+        size_t entry_len = strlen(entries[i].url);
+        if (entry_len >= url_len) {
+            const char *suffix = entries[i].url + entry_len - url_len;
+            if (strcmp(suffix, url) == 0)
+                return &entries[i].img;
+        }
+        /* Umgekehrt: volle URL als Key, src als gespeicherter Pfad */
+        if (url_len >= entry_len) {
+            const char *suffix = url + url_len - entry_len;
+            if (strcmp(suffix, entries[i].url) == 0)
+                return &entries[i].img;
+        }
     }
     return NULL;
 }
