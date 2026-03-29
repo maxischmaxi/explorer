@@ -473,6 +473,62 @@ void resource_collection_free(ResourceCollection *col)
     col->count = 0;
 }
 
+int resource_extract_inline_css(const char *html, size_t html_len,
+                                ResourceCollection *col)
+{
+    if (!html || html_len == 0) return 0;
+
+    lxb_html_document_t *doc = lxb_html_document_create();
+    if (!doc) return -1;
+
+    lxb_status_t status = lxb_html_document_parse(
+        doc, (const lxb_char_t *)html, html_len);
+    if (status != LXB_STATUS_OK) {
+        lxb_html_document_destroy(doc);
+        return -1;
+    }
+
+    lxb_dom_element_t *root = lxb_dom_document_element(&doc->dom_document);
+    if (!root) { lxb_html_document_destroy(doc); return 0; }
+
+    lxb_dom_collection_t *elcol = lxb_dom_collection_create(
+        lxb_dom_interface_document(doc));
+    if (!elcol) { lxb_html_document_destroy(doc); return -1; }
+    lxb_dom_collection_init(elcol, 16);
+
+    collect_elements(root, elcol, "style");
+    int found = 0;
+    for (size_t i = 0; i < lxb_dom_collection_length(elcol); i++) {
+        lxb_dom_element_t *el = lxb_dom_collection_element(elcol, i);
+        lxb_dom_node_t *child = lxb_dom_node_first_child(
+            lxb_dom_interface_node(el));
+
+        while (child) {
+            if (child->type == LXB_DOM_NODE_TYPE_TEXT) {
+                size_t text_len;
+                const lxb_char_t *text = lxb_dom_node_text_content(
+                    child, &text_len);
+                if (text && text_len > 0) {
+                    char *data = malloc(text_len + 1);
+                    if (data) {
+                        memcpy(data, text, text_len);
+                        data[text_len] = '\0';
+                        add_resource(col, strdup("<inline style>"), data,
+                                     text_len, RES_TYPE_CSS, 1);
+                        found++;
+                    }
+                }
+            }
+            child = lxb_dom_node_next(child);
+        }
+    }
+
+    lxb_dom_collection_destroy(elcol, true);
+    lxb_html_document_destroy(doc);
+    printf("  Extracted %d inline <style> blocks\n", found);
+    return found;
+}
+
 const char *resource_type_name(ResourceType type)
 {
     switch (type) {

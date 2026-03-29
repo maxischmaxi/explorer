@@ -94,5 +94,43 @@ server.tool(
   }
 );
 
+server.tool(
+  "navigate",
+  "Navigates the Explorer browser to a given URL. Browser must be running with 'make dev'.",
+  {
+    url: z.string().describe("The URL to navigate to"),
+  },
+  async ({ url }) => {
+    try {
+      const resp = await sendBrowserCommand({
+        command: "navigate",
+        url,
+      });
+
+      if (resp.error) {
+        return {
+          content: [{ type: "text" as const, text: `Navigation failed: ${resp.error}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Navigated to: ${(resp as any).url ?? url}`,
+          },
+        ],
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text" as const, text: `Error: ${message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);

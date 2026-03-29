@@ -147,3 +147,12 @@ void scrollbar_draw(const ScrollbarState *state, int fb_w, int fb_h)
 
     draw_rounded_rect(tx, ty, tw, th, r, g, b, alpha, fb_w, fb_h);
 }
+
+bool scrollbar_is_animating(const ScrollbarState *state)
+{
+    if (!scrollbar_needed(state)) return false;
+    if (state->hovered || state->dragging) return true;
+    extern double glfwGetTime(void);
+    float elapsed = (float)glfwGetTime() - state->last_scroll_time;
+    return elapsed < (FADE_START + FADE_DURATION);
+}

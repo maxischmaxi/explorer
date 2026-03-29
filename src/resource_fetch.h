@@ -55,6 +55,11 @@ int resource_extract_urls(const char *html, size_t html_len,
    Gibt 1 zurueck wenn ein Fetch gemacht wurde, 0 wenn Queue leer. */
 int resource_fetch_next(PendingQueue *queue, ResourceCollection *col);
 
+/* Extrahiert Inline-<style>-Bloecke aus HTML direkt in die Collection.
+   Braucht keinen Fetch — die Daten sind schon im HTML. */
+int resource_extract_inline_css(const char *html, size_t html_len,
+                                ResourceCollection *col);
+
 void pending_queue_free(PendingQueue *queue);
 void resource_collection_free(ResourceCollection *col);
 

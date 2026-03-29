@@ -69,10 +69,16 @@ void content_view_draw(float y_offset, float content_w, int fb_w, int fb_h)
 
     if (layout.count == 0) return;
 
-    float lh = renderer_line_height();
     float viewport_h = (float)fb_h - y_offset;
     last_viewport_h = viewport_h;
     last_y_offset = y_offset;
+
+    /* Body-Background ueber den ganzen Viewport */
+    if (layout.has_body_bg) {
+        renderer_draw_rect(0, y_offset, content_w, viewport_h,
+                           layout.body_bg_r, layout.body_bg_g, layout.body_bg_b,
+                           layout.body_bg_a, fb_w, fb_h);
+    }
 
     for (int i = 0; i < layout.count; i++) {
         LayoutBox *b = &layout.boxes[i];
@@ -124,21 +130,19 @@ void content_view_draw(float y_offset, float content_w, int fb_w, int fb_h)
 
             if (is_hov) { tr = 0.55f; tg = 0.75f; tb = 1.0f; }
 
-            if (b->font_scale != 1.0f)
-                renderer_draw_text_scaled(b->text, draw_x, draw_y, b->font_scale,
-                                          tr, tg, tb, fb_w, fb_h);
-            else
-                renderer_draw_text(b->text, draw_x, draw_y, tr, tg, tb, fb_w, fb_h);
+            renderer_draw_text_sized(b->text, draw_x, draw_y, b->font_size,
+                                     b->font_id, tr, tg, tb, fb_w, fb_h);
 
             /* Text-Decoration: underline */
-            float tw = renderer_text_width(b->text) * b->font_scale;
+            float tw = renderer_text_width_sized(b->text, b->font_size, b->font_id);
+            float box_lh = renderer_line_height_sized(b->font_size);
             if (b->text_decoration == 1 || (b->href && is_hov)) {
-                renderer_draw_rect(draw_x, draw_y + lh - 2.0f, tw, 1.0f,
+                renderer_draw_rect(draw_x, draw_y + box_lh - 2.0f, tw, 1.0f,
                                    tr, tg, tb, 0.9f, fb_w, fb_h);
             }
             /* Text-Decoration: line-through */
             if (b->text_decoration == 2) {
-                renderer_draw_rect(draw_x, draw_y + lh * 0.45f, tw, 1.0f,
+                renderer_draw_rect(draw_x, draw_y + box_lh * 0.45f, tw, 1.0f,
                                    tr, tg, tb, 0.7f, fb_w, fb_h);
             }
         }
@@ -206,7 +210,7 @@ static int find_box_at(float x, float y)
     for (int i = 0; i < layout.count; i++) {
         LayoutBox *b = &layout.boxes[i];
         if (!b->text) continue;
-        float tw = renderer_text_width(b->text);
+        float tw = renderer_text_width_sized(b->text, b->font_size, b->font_id);
         if (lx >= b->x && lx <= b->x + tw &&
             ly >= b->y && ly <= b->y + b->h) {
             return i;

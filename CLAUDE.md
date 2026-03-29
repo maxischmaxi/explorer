@@ -77,13 +77,28 @@ Antwort:
 
 Der `path`-Parameter gibt den Ordner an in dem der Screenshot abgelegt wird. Standard: `/tmp`.
 
+#### Navigate
+
+Navigiert den Browser zu einer URL.
+
+```json
+{"command": "navigate", "url": "https://example.com"}
+```
+
+Antwort:
+```json
+{"ok": true, "url": "https://example.com"}
+```
+
 ## MCP Screenshot-Tool
 
 Das Projekt enthält einen MCP-Server unter `tools/mcp-screenshot/` der über `.mcp.json` konfiguriert ist. Damit kann Claude direkt Screenshots vom Browser machen.
 
 **Voraussetzung:** Browser muss mit `make dev` laufen (Debug-Port 9222).
 
-**Tool:** `screenshot` — Macht einen Screenshot und gibt ihn als Bild zurück. Screenshots werden in `screenshots/` abgelegt.
+**Tools:**
+- `screenshot` — Macht einen Screenshot und gibt ihn als Bild zurück. Screenshots werden in `screenshots/` abgelegt.
+- `navigate` — Navigiert den Browser zu einer URL. Parameter: `url` (string).
 
 ## Keyboard-Shortcuts
 

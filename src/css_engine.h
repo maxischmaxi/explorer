@@ -1,6 +1,7 @@
 #ifndef CSS_ENGINE_H
 #define CSS_ENGINE_H
 
+#include <stdint.h>
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
 #include "resource_fetch.h"
@@ -10,7 +11,8 @@ typedef struct {
     float padding_top, padding_right, padding_bottom, padding_left;
     float color_r, color_g, color_b;
     float bg_r, bg_g, bg_b, bg_a;
-    float font_size;
+    float   font_size;
+    uint8_t font_id;       /* aufgeloeste Font-ID (0 = default) */
     int   display;       /* -1=nicht gesetzt, 0=NONE, 1=BLOCK, 2=INLINE, 3=LIST_ITEM, 4=FLEX */
     /* Flex container */
     int   flex_direction;    /* 0=row, 1=row-reverse, 2=column, 3=column-reverse */
@@ -32,23 +34,31 @@ typedef struct {
     int   text_decoration;   /* Bitmask: 1=underline, 2=line-through, 4=overline */
     /* Border (vereinfacht: alle Seiten gleich) */
     float border_width;
-    float border_r, border_g, border_b;
+    float border_r, border_g, border_b, border_a;
+    /* Opacity */
+    float opacity;
+    float color_a;
     /* Overflow */
     int   overflow;          /* 0=visible, 1=hidden, 2=scroll, 3=auto */
+    /* Position */
+    int   position;          /* 0=static, 1=relative, 2=absolute, 3=fixed */
+    float pos_top, pos_left, pos_right, pos_bottom;  /* -1 = auto */
     /* Has-Flags */
     int   has_color;
     int   has_bg;
     int   margin_left_auto, margin_right_auto;
     int   has_margin_top, has_margin_bottom, has_margin_left, has_margin_right;
     int   has_padding_top, has_padding_bottom, has_padding_left, has_padding_right;
-    int   has_font_size;
+    int   has_font_size, has_font_id;
     int   has_display;
     int   has_flex_direction, has_flex_wrap, has_justify, has_align_items;
     int   has_gap, has_flex_grow, has_flex_shrink, has_flex_basis;
     int   has_width, has_height, has_max_width;
     int   has_text_align, has_text_decoration;
     int   has_border;
+    int   has_opacity;
     int   has_overflow;
+    int   has_position, has_top, has_left, has_right, has_bottom;
 } ComputedStyle;
 
 /* Parst alle CSS-Quellen und berechnet Computed Styles fuers DOM. */

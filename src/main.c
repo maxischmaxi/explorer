@@ -18,6 +18,7 @@
 #include "fetch_manager.h"
 #include "css_engine.h"
 #include "debug_server.h"
+#include "scrollbar.h"
 #include <lexbor/html/html.h>
 
 #define WINDOW_TITLE  "Explorer Browser"
@@ -41,6 +42,7 @@ static int                dragging_scrollbar; /* 1=content, 2=devtools */
 static char               last_url[2048];
 static const char        *hovered_link;  /* zeigt in LayoutBox, nicht freigeben */
 static int                css_needs_apply; /* 1 wenn neue CSS-Sheets geladen, warten auf Fetch-Ende */
+static int                frame_dirty = 1; /* 1 = Frame muss neu gerendert werden */
 
 /* Multiclick-Tracking */
 static double last_click_time;
@@ -55,6 +57,7 @@ static void update_content_width(int win_w)
 
 static void navigate(const char *url)
 {
+    frame_dirty = 1;
     printf("Fetching: %s\n", url);
 
     /* URL fuer Reload merken */
@@ -66,6 +69,7 @@ static void navigate(const char *url)
     resource_collection_free(&resources);
     pending_queue_free(&pending);
     image_cache_clear();
+    renderer_cache_clear();
     css_needs_apply = 0;
 
     HTTPResponse resp;
@@ -84,6 +88,9 @@ static void navigate(const char *url)
     printf("HTML: HTTP %ld, %zu bytes\n", resp.status_code, resp.len);
 
     content_view_set_html(resp.data, resp.len);
+    resource_extract_inline_css(resp.data, resp.len, &resources);
+    if (resources.count > 0)
+        css_needs_apply = 1;
     resource_extract_urls(resp.data, resp.len, url, &pending);
     fetch_manager_start(&pending);
     http_response_free(&resp);
@@ -113,6 +120,8 @@ static void key_callback(GLFWwindow *window, int key, int scancode,
     (void)scancode;
     if (action != GLFW_PRESS && action != GLFW_REPEAT)
         return;
+
+    frame_dirty = 1;
 
     int ctrl  = mods & GLFW_MOD_CONTROL;
     int shift = mods & GLFW_MOD_SHIFT;
@@ -207,6 +216,7 @@ static void key_callback(GLFWwindow *window, int key, int scancode,
 static void char_callback(GLFWwindow *window, unsigned int codepoint)
 {
     (void)window;
+    frame_dirty = 1;
     url_bar_char_input(&url_bar, codepoint);
 }
 
@@ -214,6 +224,7 @@ static void mouse_button_callback(GLFWwindow *window, int button,
                                    int action, int mods)
 {
     (void)mods;
+    frame_dirty = 1;
     if (button != GLFW_MOUSE_BUTTON_LEFT)
         return;
 
@@ -339,6 +350,7 @@ static void cursor_pos_callback(GLFWwindow *window, double mx, double my)
 
     /* Scrollbar-Drag */
     if (dragging_scrollbar) {
+        frame_dirty = 1;
         double now = glfwGetTime();
         if (dragging_scrollbar == 1) {
             ScrollbarState *sb = content_view_get_scrollbar();
@@ -356,6 +368,7 @@ static void cursor_pos_callback(GLFWwindow *window, double mx, double my)
     }
 
     if (dragging_divider) {
+        frame_dirty = 1;
         float new_width = (float)ww - (float)mx;
         float max_w = (float)ww * 0.7f;
         if (new_width > max_w) new_width = max_w;
@@ -375,6 +388,7 @@ static void cursor_pos_callback(GLFWwindow *window, double mx, double my)
 
     /* Redraw triggern bei Hover-Aenderung */
     if (cv_sb->hovered != prev_cv || dt_sb->hovered != prev_dt) {
+        frame_dirty = 1;
         if (cv_sb->hovered) scrollbar_touch(cv_sb, glfwGetTime());
         if (dt_sb->hovered) scrollbar_touch(dt_sb, glfwGetTime());
         glfwPostEmptyEvent();
@@ -392,19 +406,24 @@ static void cursor_pos_callback(GLFWwindow *window, double mx, double my)
     }
 
     /* Link-Hover */
-    content_view_set_hover((float)mx, (float)my);
-    hovered_link = content_view_link_at((float)mx, (float)my);
-    if (hovered_link) {
-        glfwSetCursor(window, cursor_hand);
-        glfwPostEmptyEvent();
-    } else {
-        glfwSetCursor(window, NULL);
+    {
+        const char *prev_link = hovered_link;
+        content_view_set_hover((float)mx, (float)my);
+        hovered_link = content_view_link_at((float)mx, (float)my);
+        if (hovered_link != prev_link) frame_dirty = 1;
+        if (hovered_link) {
+            glfwSetCursor(window, cursor_hand);
+            glfwPostEmptyEvent();
+        } else {
+            glfwSetCursor(window, NULL);
+        }
     }
 }
 
 static void scroll_callback(GLFWwindow *window, double xoffset, double yoffset)
 {
     (void)xoffset;
+    frame_dirty = 1;
     double mx, my;
     glfwGetCursorPos(window, &mx, &my);
     int ww, wh;
@@ -424,6 +443,7 @@ static void framebuffer_size_callback(GLFWwindow *window, int width, int height)
 {
     (void)window;
     glViewport(0, 0, width, height);
+    frame_dirty = 1;
 }
 
 int main(int argc, char *argv[])
@@ -500,68 +520,90 @@ int main(int argc, char *argv[])
     glClearColor(0.10f, 0.10f, 0.12f, 1.0f);
 
     while (!glfwWindowShouldClose(window)) {
-        int fw, fh;
-        glfwGetFramebufferSize(window, &fw, &fh);
-        int ww, wh;
-        glfwGetWindowSize(window, &ww, &wh);
 
-        float dt_w = devtools_get_width();
-        float content_w = (float)ww - dt_w;
+        /* --- Rendering nur wenn noetig --- */
+        if (frame_dirty) {
+            int fw, fh;
+            glfwGetFramebufferSize(window, &fw, &fh);
+            int ww, wh;
+            glfwGetWindowSize(window, &ww, &wh);
 
-        glClear(GL_COLOR_BUFFER_BIT);
+            float dt_w = devtools_get_width();
+            float content_w = (float)ww - dt_w;
 
-        url_bar_draw(&url_bar, content_w, fw, fh);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        float content_y = 8.0f + url_bar.height + 8.0f;
-        content_view_draw(content_y, content_w, fw, fh);
+            url_bar_draw(&url_bar, content_w, fw, fh);
 
-        if (devtools_is_visible()) {
-            float panel_x = content_w;
-            devtools_draw(panel_x, content_y, fw, fh);
-        }
+            float content_y = 8.0f + url_bar.height + 8.0f;
+            content_view_draw(content_y, content_w, fw, fh);
 
-        /* Link-URL Overlay links unten (wie Chrome) */
-        if (hovered_link) {
-            float lh = renderer_line_height();
-            float pad = 6.0f;
-            float text_w = renderer_text_width(hovered_link);
-            float max_tw = content_w * 0.6f;
-            char trunc_buf[512];
-            const char *display_url = hovered_link;
-            if (text_w > max_tw) {
-                size_t len = strlen(hovered_link);
-                size_t cut = len;
-                float w = 0;
-                float dots_w = renderer_text_width("...");
-                char tmp[2] = {0, 0};
-                for (size_t ci = 0; ci < len && ci < sizeof(trunc_buf) - 4; ci++) {
-                    tmp[0] = hovered_link[ci];
-                    w += renderer_text_width(tmp);
-                    if (w + dots_w > max_tw) { cut = ci; break; }
-                }
-                memcpy(trunc_buf, hovered_link, cut);
-                trunc_buf[cut] = '.'; trunc_buf[cut+1] = '.'; trunc_buf[cut+2] = '.'; trunc_buf[cut+3] = '\0';
-                display_url = trunc_buf;
-                text_w = renderer_text_width(display_url);
+            if (devtools_is_visible()) {
+                float panel_x = content_w;
+                devtools_draw(panel_x, content_y, fw, fh);
             }
-            float box_w = text_w + 2.0f * pad;
-            float box_h = lh + 2.0f * pad;
-            float box_x = 0;
-            float box_y = (float)wh - box_h;
-            renderer_draw_rect(box_x, box_y, box_w, box_h,
-                               0.16f, 0.16f, 0.18f, 0.92f, fw, fh);
-            renderer_draw_rect(box_x, box_y, box_w, 1.0f,
-                               0.30f, 0.30f, 0.35f, 0.8f, fw, fh);
-            renderer_draw_rect(box_x + box_w, box_y, 1.0f, box_h,
-                               0.30f, 0.30f, 0.35f, 0.8f, fw, fh);
-            renderer_draw_text(display_url, box_x + pad, box_y + pad,
-                               0.70f, 0.72f, 0.75f, fw, fh);
-        }
 
-        glfwSwapBuffers(window);
+            /* Link-URL Overlay links unten (wie Chrome) */
+            if (hovered_link) {
+                float lh = renderer_line_height();
+                float pad = 6.0f;
+                float text_w = renderer_text_width(hovered_link);
+                float max_tw = content_w * 0.6f;
+                char trunc_buf[512];
+                const char *display_url = hovered_link;
+                if (text_w > max_tw) {
+                    size_t len = strlen(hovered_link);
+                    size_t cut = len;
+                    float w = 0;
+                    float dots_w = renderer_text_width("...");
+                    char tmp[2] = {0, 0};
+                    for (size_t ci = 0; ci < len && ci < sizeof(trunc_buf) - 4; ci++) {
+                        tmp[0] = hovered_link[ci];
+                        w += renderer_text_width(tmp);
+                        if (w + dots_w > max_tw) { cut = ci; break; }
+                    }
+                    memcpy(trunc_buf, hovered_link, cut);
+                    trunc_buf[cut] = '.'; trunc_buf[cut+1] = '.'; trunc_buf[cut+2] = '.'; trunc_buf[cut+3] = '\0';
+                    display_url = trunc_buf;
+                    text_w = renderer_text_width(display_url);
+                }
+                float box_w = text_w + 2.0f * pad;
+                float box_h = lh + 2.0f * pad;
+                float box_x = 0;
+                float box_y = (float)wh - box_h;
+                renderer_draw_rect(box_x, box_y, box_w, box_h,
+                                   0.16f, 0.16f, 0.18f, 0.92f, fw, fh);
+                renderer_draw_rect(box_x, box_y, box_w, 1.0f,
+                                   0.30f, 0.30f, 0.35f, 0.8f, fw, fh);
+                renderer_draw_rect(box_x + box_w, box_y, 1.0f, box_h,
+                                   0.30f, 0.30f, 0.35f, 0.8f, fw, fh);
+                renderer_draw_text(display_url, box_x + pad, box_y + pad,
+                                   0.70f, 0.72f, 0.75f, fw, fh);
+            }
+
+            glDisable(GL_BLEND);
+            glfwSwapBuffers(window);
+            frame_dirty = 0;
+        }
 
         /* Debug-Server pollen (nach SwapBuffers fuer aktuelle Pixel) */
         debug_server_poll();
+
+        /* Ausstehende Navigation vom Debug-Server */
+        {
+            char *nav_url = debug_server_consume_navigate();
+            if (nav_url) {
+                strncpy(url_bar.text, nav_url, URL_BAR_MAX_LEN - 1);
+                url_bar.text[URL_BAR_MAX_LEN - 1] = '\0';
+                url_bar.len = (int)strlen(url_bar.text);
+                url_bar.cursor = url_bar.len;
+                url_bar.sel_start = -1;
+                navigate(nav_url);
+                free(nav_url);
+            }
+        }
 
         /* Paralleles Resource-Fetching */
         int prev_count = resources.count;
@@ -569,7 +611,6 @@ int main(int argc, char *argv[])
 
         /* Neue Ressourcen verarbeiten */
         int need_relayout = 0;
-        int got_new_css = 0;
         for (int i = prev_count; i < resources.count; i++) {
             if (resources.entries[i].type == RES_TYPE_IMAGE &&
                 resources.entries[i].data) {
@@ -580,6 +621,14 @@ int main(int argc, char *argv[])
             }
             if (resources.entries[i].type == RES_TYPE_CSS) {
                 css_needs_apply = 1;
+            }
+            if (resources.entries[i].type == RES_TYPE_FONT &&
+                resources.entries[i].data) {
+                int fid = renderer_load_font_mem(
+                    resources.entries[i].data,
+                    resources.entries[i].data_len);
+                if (fid > 0)
+                    need_relayout = 1;
             }
         }
 
@@ -595,12 +644,23 @@ int main(int argc, char *argv[])
 
         if (need_relayout) {
             content_view_mark_dirty();
+            frame_dirty = 1;
         }
 
+        /* --- Event-Wait-Strategie --- */
+        int scrollbar_animating =
+            scrollbar_is_animating(content_view_get_scrollbar()) ||
+            scrollbar_is_animating(devtools_get_scrollbar());
+
         if (remaining > 0) {
-            /* Solange Transfers laufen: ~60 FPS fuer responsive UI */
-            glfwWaitEventsTimeout(0.016);
+            /* Fetches laufen: ~10 FPS Polling, Redraw nur bei neuem Content */
+            glfwWaitEventsTimeout(0.1);
+        } else if (scrollbar_animating) {
+            /* Scrollbar-Fade laeuft: ~30 FPS fuer smooth Animation */
+            frame_dirty = 1;
+            glfwWaitEventsTimeout(0.033);
         } else {
+            /* Idle: blockieren bis naechstes Event */
             glfwWaitEvents();
         }
     }

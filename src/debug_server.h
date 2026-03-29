@@ -12,4 +12,8 @@ void debug_server_poll(void);
 /* Stoppt den Server und schliesst alle Connections. */
 void debug_server_stop(void);
 
+/* Gibt eine ausstehende Navigate-URL zurueck (oder NULL).
+   Der Aufrufer muss den zurueckgegebenen String mit free() freigeben. */
+char *debug_server_consume_navigate(void);
+
 #endif

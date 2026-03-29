@@ -134,7 +134,13 @@ typedef struct {
     int     at_line_start;
     int     text_decoration;  /* vererbt: 0=none, 1=underline, 2=line-through */
     int     text_align;       /* vererbt: 0=left, 1=right, 2=center */
-    float   font_scale;       /* vererbt: 1.0 = 16px */
+    float   font_size;        /* vererbt: tatsaechliche Groesse in logischen Pixeln */
+    uint8_t font_id;          /* vererbt: Font-ID */
+    /* Inline-Background (vererbt fuer Inline-Elemente) */
+    float   inline_bg_r, inline_bg_g, inline_bg_b, inline_bg_a;
+    int     has_inline_bg;
+    /* Containing Block fuer position:absolute Kinder */
+    float   cb_x, cb_y, cb_w;
 } LayoutCtx;
 
 /* Attribut-Wert als int parsen (-1 wenn nicht vorhanden oder ungueltig). */
@@ -161,7 +167,7 @@ static char *get_str_attr(lxb_dom_element_t *el, const char *name)
 }
 
 static void emit_box(LayoutCtx *ctx, float x, float y, float w, float h,
-                     const char *text, float font_scale,
+                     const char *text, float font_size,
                      float cr, float cg, float cb,
                      float bgr, float bgg, float bgb, float bga,
                      int is_hr, int is_link, int is_img)
@@ -180,7 +186,8 @@ static void emit_box(LayoutCtx *ctx, float x, float y, float w, float h,
     LayoutBox *b = &L->boxes[L->count++];
     b->x = x; b->y = y; b->w = w; b->h = h;
     b->text = text ? strdup(text) : NULL;
-    b->font_scale = font_scale;
+    b->font_size = font_size;
+    b->font_id = ctx->font_id;
     b->color_r = cr; b->color_g = cg; b->color_b = cb;
     b->bg_r = bgr; b->bg_g = bgg; b->bg_b = bgb; b->bg_a = bga;
     b->is_hr = is_hr;
@@ -225,21 +232,22 @@ static char *collapse_whitespace(const char *text, size_t len)
 /* ---- Text-Layout (Word-Wrap) ---- */
 
 static void layout_text(LayoutCtx *ctx, const char *text,
-                        float font_scale, float r, float g, float b,
+                        float font_size, float r, float g, float b,
                         int is_link, const char *href, float right_edge)
 {
-    float lh = ctx->line_h * font_scale;
-    if (lh < ctx->line_h) lh = ctx->line_h;
+    float lh = renderer_line_height_sized(font_size);
+    float base_lh = renderer_line_height_sized(ctx->font_size);
+    if (lh < base_lh) lh = base_lh;
 
     const char *p = text;
     while (*p) {
-        /* Führende Spaces am Zeilenanfang überspringen */
+        /* Fuehrende Spaces am Zeilenanfang ueberspringen */
         if (ctx->at_line_start) {
             while (*p == ' ') p++;
             if (!*p) break;
         }
 
-        /* Nächstes Wort finden */
+        /* Naechstes Wort finden */
         const char *word_start = p;
         while (*p && *p != ' ') p++;
         size_t word_len = (size_t)(p - word_start);
@@ -250,21 +258,24 @@ static void layout_text(LayoutCtx *ctx, const char *text,
         memcpy(word, word_start, word_len);
         word[word_len] = '\0';
 
-        float ww = renderer_text_width(word) * font_scale;
+        float ww = renderer_text_width_sized(word, font_size, ctx->font_id);
 
-        /* Zeilenumbruch nötig? */
+        /* Zeilenumbruch noetig? */
         if (!ctx->at_line_start && ctx->cursor_x + ww > right_edge) {
             ctx->cursor_y += lh;
             ctx->cursor_x = ctx->block_start_x;
             ctx->at_line_start = 1;
-            /* Nochmal Space-Skip am Zeilenanfang */
             continue;
         }
 
         /* Wort emittieren */
         int idx = ctx->layout->count;
         emit_box(ctx, ctx->cursor_x, ctx->cursor_y, ww, lh,
-                 word, font_scale, r, g, b, 0, 0, 0, 0,
+                 word, font_size, r, g, b,
+                 ctx->has_inline_bg ? ctx->inline_bg_r : 0,
+                 ctx->has_inline_bg ? ctx->inline_bg_g : 0,
+                 ctx->has_inline_bg ? ctx->inline_bg_b : 0,
+                 ctx->has_inline_bg ? ctx->inline_bg_a : 0,
                  0, is_link, 0);
         if (idx < ctx->layout->count) {
             if (href) ctx->layout->boxes[idx].href = strdup(href);
@@ -276,7 +287,15 @@ static void layout_text(LayoutCtx *ctx, const char *text,
 
         /* Space nach dem Wort */
         if (*p == ' ') {
-            float sw = renderer_text_width(" ") * font_scale;
+            float sw = renderer_text_width_sized(" ", font_size, ctx->font_id);
+            /* Bei aktivem Inline-Background: Space als Box emittieren */
+            if (ctx->has_inline_bg) {
+                emit_box(ctx, ctx->cursor_x, ctx->cursor_y, sw, lh,
+                         NULL, font_size, r, g, b,
+                         ctx->inline_bg_r, ctx->inline_bg_g,
+                         ctx->inline_bg_b, ctx->inline_bg_a,
+                         0, 0, 0);
+            }
             ctx->cursor_x += sw;
             p++;
         }
@@ -288,7 +307,8 @@ static void layout_text(LayoutCtx *ctx, const char *text,
 static void layout_pre_text(LayoutCtx *ctx, const char *text, size_t len,
                             float r, float g, float b, float right_edge)
 {
-    float lh = ctx->line_h;
+    float fs = ctx->font_size;
+    float lh = renderer_line_height_sized(fs);
     const char *p = text;
     const char *end = text + len;
 
@@ -302,9 +322,9 @@ static void layout_pre_text(LayoutCtx *ctx, const char *text, size_t len,
             memcpy(line, p, line_len);
             line[line_len] = '\0';
 
-            float ww = renderer_text_width(line);
+            float ww = renderer_text_width_sized(line, fs, ctx->font_id);
             emit_box(ctx, ctx->cursor_x, ctx->cursor_y, ww, lh,
-                     line, 1.0f, r, g, b, 0, 0, 0, 0, 0, 0, 0);
+                     line, fs, r, g, b, 0, 0, 0, 0, 0, 0, 0);
         }
 
         ctx->cursor_y += lh;
@@ -358,7 +378,8 @@ static float measure_intrinsic(LayoutCtx *parent, lxb_dom_node_t *node,
 
     float main_size = mctx.cursor_x;  /* Fuer row: Breite */
     float cross = tmp.total_height;
-    if (cross < mctx.line_h) cross = mctx.line_h;
+    float base_lh = renderer_line_height_sized(mctx.font_size);
+    if (cross < base_lh) cross = base_lh;
 
     if (out_cross) *out_cross = cross;
 
@@ -378,7 +399,7 @@ static void layout_flex(LayoutCtx *ctx, lxb_dom_node_t *container,
                         int is_link, const char *href,
                         int in_pre, float right_edge)
 {
-    float lh = ctx->line_h;
+    float lh = renderer_line_height_sized(ctx->font_size);
     int is_column = (css->flex_direction == 2 || css->flex_direction == 3);
     float avail_main = is_column ? 100000.0f : (right_edge - ctx->block_start_x);
 
@@ -401,7 +422,7 @@ static void layout_flex(LayoutCtx *ctx, lxb_dom_node_t *container,
     if (css->has_bg) {
         emit_box(ctx, ctx->block_start_x, container_y,
                  right_edge - ctx->block_start_x, lh,
-                 NULL, 1.0f, 0, 0, 0,
+                 NULL, ctx->font_size, 0, 0, 0,
                  css->bg_r, css->bg_g, css->bg_b, css->bg_a,
                  0, 0, 0);
     }
@@ -636,7 +657,7 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
             char *collapsed = collapse_whitespace((const char *)raw, text_len);
             if (collapsed) {
                 if (collapsed[0] != '\0')
-                    layout_text(ctx, collapsed, ctx->font_scale, r, g, b, is_link, href, right_edge);
+                    layout_text(ctx, collapsed, ctx->font_size, r, g, b, is_link, href, right_edge);
                 free(collapsed);
             }
         }
@@ -653,7 +674,7 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
     if (disp == DISP_NONE) return;
 
     TagStyle style = style_for_tag(tag);
-    float lh = ctx->line_h;
+    float lh = renderer_line_height_sized(ctx->font_size);
 
     /* CSS Computed Styles als Overlay */
     lxb_dom_element_t *el = lxb_dom_interface_element(node);
@@ -667,7 +688,7 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
         else if (css.display == 4) disp = DISP_FLEX;
     }
     if (css.has_color) { style.r = css.color_r; style.g = css.color_g; style.b = css.color_b; }
-    if (css.has_font_size) style.font_scale = css.font_size / 16.0f;
+    if (css.has_font_size) style.font_scale = css.font_size / ctx->font_size;
     if (css.has_margin_top) style.margin_top = css.margin_top / lh;
     if (css.has_margin_bottom) style.margin_bottom = css.margin_bottom / lh;
     if (css.has_margin_left) style.padding_left += css.margin_left;
@@ -675,6 +696,14 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
 
     /* CSS display:none fuer andere Elemente */
     if (disp == DISP_NONE) return;
+
+    /* position: absolute/fixed — aus dem Flow entfernen, nicht rendern.
+       Vollstaendige Implementierung mit Containing Blocks, Stacking Contexts
+       und Prozent-Werten ist zu komplex fuer den minimalen Browser.
+       Absolute Elemente sind typischerweise Overlays/Dropdowns/Tooltips. */
+    if (css.has_position && (css.position == 2 || css.position == 3)) {
+        return;
+    }
 
     /* Farbe vererben oder überschreiben */
     float nr = r, ng = g, nb = b;
@@ -703,13 +732,17 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
 
     if (tag == LXB_TAG_PRE) n_in_pre = 1;
 
-    /* CSS text-decoration + text-align + font-scale in Kontext vererben */
+    /* CSS text-decoration + text-align + font-size in Kontext vererben */
     int old_text_decoration = ctx->text_decoration;
-    float old_font_scale = ctx->font_scale;
+    float old_font_size = ctx->font_size;
     if (css.has_text_decoration) ctx->text_decoration = css.text_decoration;
     if (css.has_text_align) ctx->text_align = css.text_align;
-    if (css.has_font_size || style.font_scale != 1.0f)
-        ctx->font_scale = style.font_scale;
+    if (css.has_font_size)
+        ctx->font_size = css.font_size;
+    else if (style.font_scale != 1.0f)
+        ctx->font_size = ctx->font_size * style.font_scale;
+    if (css.has_font_id)
+        ctx->font_id = css.font_id;
 
     /* ---- Spezialfälle ---- */
 
@@ -726,7 +759,7 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
         ctx->cursor_y += lh * 0.5f;
         emit_box(ctx, ctx->block_start_x, ctx->cursor_y,
                  right_edge - ctx->block_start_x, 1.0f,
-                 NULL, 1.0f, 0, 0, 0,
+                 NULL, ctx->font_size, 0, 0, 0,
                  0.40f, 0.40f, 0.45f, 1.0f,
                  1, 0, 0);
         ctx->cursor_y += lh * 0.5f;
@@ -787,7 +820,7 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
 
         int idx = ctx->layout->count;
         emit_box(ctx, ctx->cursor_x, ctx->cursor_y, iw, ih,
-                 ci ? NULL : "[img]", 1.0f,
+                 ci ? NULL : "[img]", ctx->font_size,
                  0.50f, 0.50f, 0.55f,
                  ci ? 0.0f : 0.18f, ci ? 0.0f : 0.18f, ci ? 0.0f : 0.20f,
                  ci ? 0.0f : 1.0f,
@@ -808,7 +841,7 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
     if (disp == DISP_FLEX) {
         layout_flex(ctx, node, &style, &css, nr, ng, nb,
                     n_is_link, n_href, n_in_pre, right_edge);
-        ctx->font_scale = old_font_scale;
+        ctx->font_size = old_font_size;
         ctx->text_decoration = old_text_decoration;
         free(a_href_alloc);
         return;
@@ -876,7 +909,7 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
             float bw = new_right - old_block_x;
             if (bw < 0) bw = right_edge - old_block_x;
             emit_box(ctx, old_block_x, ctx->cursor_y, bw, css.border_width,
-                     NULL, 1.0f, 0, 0, 0,
+                     NULL, ctx->font_size, 0, 0, 0,
                      css.border_r, css.border_g, css.border_b, 1.0f,
                      0, 0, 0);
             ctx->cursor_y += css.border_width;
@@ -889,7 +922,7 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
             float bw = new_right - old_block_x;
             if (bw < 0) bw = right_edge - old_block_x;
             emit_box(ctx, old_block_x, ctx->cursor_y, bw, lh,
-                     NULL, 1.0f, 0, 0, 0,
+                     NULL, ctx->font_size, 0, 0, 0,
                      css.bg_r, css.bg_g, css.bg_b, css.bg_a,
                      0, 0, 0);
         }
@@ -898,11 +931,11 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
         if (css.has_padding_top)
             ctx->cursor_y += css.padding_top;
 
-        /* Bullet für li */
+        /* Bullet fuer li */
         if (disp == DISP_LIST_ITEM) {
-            float bw = renderer_text_width("- ");
+            float bw = renderer_text_width_sized("\xe2\x80\xa2 ", ctx->font_size, ctx->font_id);
             emit_box(ctx, ctx->block_start_x - bw, ctx->cursor_y, bw, lh,
-                     "\xe2\x80\xa2", 1.0f, 0.55f, 0.55f, 0.60f,
+                     "\xe2\x80\xa2", ctx->font_size, 0.55f, 0.55f, 0.60f,
                      0, 0, 0, 0, 0, 0, 0);
         }
 
@@ -911,8 +944,28 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
         if (css.has_text_align) ctx->text_align = css.text_align;
         int first_box = ctx->layout->count;
 
+        /* Inline-BG fuer Block-Kinder setzen (damit Text-Boxen den BG erben) */
+        int old_has_ibg = ctx->has_inline_bg;
+        float old_ibg_r = ctx->inline_bg_r, old_ibg_g = ctx->inline_bg_g;
+        float old_ibg_b = ctx->inline_bg_b, old_ibg_a = ctx->inline_bg_a;
+        if (css.has_bg) {
+            ctx->has_inline_bg = 1;
+            ctx->inline_bg_r = css.bg_r; ctx->inline_bg_g = css.bg_g;
+            ctx->inline_bg_b = css.bg_b; ctx->inline_bg_a = css.bg_a;
+        }
+
+        /* Containing Block fuer absolute Kinder updaten */
+        float old_cb_x = ctx->cb_x, old_cb_y = ctx->cb_y, old_cb_w = ctx->cb_w;
+        if (css.has_position && css.position != 0) {
+            ctx->cb_x = old_block_x;
+            ctx->cb_y = ctx->cursor_y;
+            ctx->cb_w = new_right - old_block_x;
+        }
+
         /* Kinder layouten */
         layout_children(ctx, node, nr, ng, nb, n_is_link, n_href, n_in_pre, new_right);
+
+        ctx->cb_x = old_cb_x; ctx->cb_y = old_cb_y; ctx->cb_w = old_cb_w;
 
         /* text-align anwenden: Zeilen horizontal verschieben */
         if (ctx->text_align == 2 || ctx->text_align == 1) {
@@ -947,10 +1000,13 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
             }
         }
         ctx->text_align = old_text_align;
+        ctx->has_inline_bg = old_has_ibg;
+        ctx->inline_bg_r = old_ibg_r; ctx->inline_bg_g = old_ibg_g;
+        ctx->inline_bg_b = old_ibg_b; ctx->inline_bg_a = old_ibg_a;
 
-        /* Pending Inline abschließen */
+        /* Pending Inline abschliessen */
         if (!ctx->at_line_start) {
-            ctx->cursor_y += lh * style.font_scale;
+            ctx->cursor_y += renderer_line_height_sized(ctx->font_size);
             ctx->at_line_start = 1;
         }
 
@@ -969,7 +1025,7 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
             float bw = new_right - old_block_x;
             if (bw < 0) bw = right_edge - old_block_x;
             emit_box(ctx, old_block_x, ctx->cursor_y, bw, css.border_width,
-                     NULL, 1.0f, 0, 0, 0,
+                     NULL, ctx->font_size, 0, 0, 0,
                      css.border_r, css.border_g, css.border_b, 1.0f,
                      0, 0, 0);
             ctx->cursor_y += css.border_width;
@@ -983,7 +1039,19 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
         ctx->cursor_x = ctx->block_start_x;
         right_edge = old_right;
 
-        ctx->font_scale = old_font_scale;
+        /* position: relative — Boxen nachtraeglich offsetten */
+        if (css.has_position && css.position == 1) {
+            float dx = css.has_left ? css.pos_left : (css.has_right ? -css.pos_right : 0);
+            float dy = css.has_top ? css.pos_top : (css.has_bottom ? -css.pos_bottom : 0);
+            if (dx != 0 || dy != 0) {
+                for (int j = first_box; j < ctx->layout->count; j++) {
+                    ctx->layout->boxes[j].x += dx;
+                    ctx->layout->boxes[j].y += dy;
+                }
+            }
+        }
+
+        ctx->font_size = old_font_size;
         ctx->text_decoration = old_text_decoration;
         free(a_href_alloc);
         return;
@@ -991,8 +1059,22 @@ static void layout_node(LayoutCtx *ctx, lxb_dom_node_t *node,
 
     /* ---- Inline-Elemente ---- */
 
+    /* Inline-Background vererben */
+    int old_has_ibg = ctx->has_inline_bg;
+    float old_ibg_r = ctx->inline_bg_r, old_ibg_g = ctx->inline_bg_g;
+    float old_ibg_b = ctx->inline_bg_b, old_ibg_a = ctx->inline_bg_a;
+    if (css.has_bg) {
+        ctx->has_inline_bg = 1;
+        ctx->inline_bg_r = css.bg_r; ctx->inline_bg_g = css.bg_g;
+        ctx->inline_bg_b = css.bg_b; ctx->inline_bg_a = css.bg_a;
+    }
+
     layout_children(ctx, node, nr, ng, nb, n_is_link, n_href, n_in_pre, right_edge);
-    ctx->font_scale = old_font_scale;
+
+    ctx->has_inline_bg = old_has_ibg;
+    ctx->inline_bg_r = old_ibg_r; ctx->inline_bg_g = old_ibg_g;
+    ctx->inline_bg_b = old_ibg_b; ctx->inline_bg_a = old_ibg_a;
+    ctx->font_size = old_font_size;
     ctx->text_decoration = old_text_decoration;
     free(a_href_alloc);
 }
@@ -1007,6 +1089,32 @@ void html_layout_build(lxb_html_document_t *doc, float avail_w, Layout *out)
     lxb_dom_element_t *root = lxb_dom_document_element(&doc->dom_document);
     if (!root) return;
 
+    /* Body- und HTML-Background extrahieren */
+    lxb_html_body_element_t *body_el = lxb_html_document_body_element(doc);
+    if (body_el) {
+        ComputedStyle body_css;
+        css_engine_get_style(lxb_dom_interface_element(body_el), &body_css);
+        if (body_css.has_bg) {
+            out->has_body_bg = 1;
+            out->body_bg_r = body_css.bg_r;
+            out->body_bg_g = body_css.bg_g;
+            out->body_bg_b = body_css.bg_b;
+            out->body_bg_a = body_css.bg_a;
+        }
+    }
+    /* Fallback: <html>-Element pruefen */
+    if (!out->has_body_bg) {
+        ComputedStyle html_css;
+        css_engine_get_style(root, &html_css);
+        if (html_css.has_bg) {
+            out->has_body_bg = 1;
+            out->body_bg_r = html_css.bg_r;
+            out->body_bg_g = html_css.bg_g;
+            out->body_bg_b = html_css.bg_b;
+            out->body_bg_a = html_css.bg_a;
+        }
+    }
+
     LayoutCtx ctx = {0};
     ctx.layout = out;
     ctx.avail_w = avail_w;
@@ -1015,7 +1123,10 @@ void html_layout_build(lxb_html_document_t *doc, float avail_w, Layout *out)
     ctx.block_start_x = 0;
     ctx.line_h = renderer_line_height();
     ctx.at_line_start = 1;
-    ctx.font_scale = 1.0f;
+    ctx.font_size = 16.0f;
+    ctx.cb_x = 0;
+    ctx.cb_y = 0;
+    ctx.cb_w = avail_w;
 
     layout_node(&ctx, lxb_dom_interface_node(root),
                 0.80f, 0.82f, 0.84f, 0, NULL, 0, avail_w);

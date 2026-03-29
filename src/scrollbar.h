@@ -42,4 +42,7 @@ float scrollbar_drag_to(const ScrollbarState *state, float my);
 /* Berechnet neuen scroll_offset bei Klick auf Track (jump to position). */
 float scrollbar_click_track(const ScrollbarState *state, float my);
 
+/* Gibt true zurueck wenn die Fade-Animation noch laeuft. */
+bool scrollbar_is_animating(const ScrollbarState *state);
+
 #endif

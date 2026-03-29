@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "explorer-screenshot": {
+    "explorer-browser": {
       "type": "stdio",
       "command": "bun",
       "args": ["run", "/code/explorer/tools/mcp-screenshot/server.ts"]

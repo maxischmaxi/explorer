@@ -174,6 +174,10 @@ static int server_fd = -1;
 static DebugClient clients[MAX_CLIENTS];
 static int debug_port;
 
+/* Pending navigate request (set by "navigate" command, consumed by main loop) */
+static char *pending_navigate_url = NULL;
+static int   pending_navigate_client_fd = -1;
+
 /* ---- Screenshot Command ---- */
 
 static void cmd_screenshot(int client_fd, const char *path)
@@ -222,6 +226,42 @@ static void cmd_screenshot(int client_fd, const char *path)
     ws_send_text(client_fd, resp, strlen(resp));
 }
 
+/* ---- Navigate Command ---- */
+
+static void cmd_navigate(int client_fd, const char *url)
+{
+    if (!url || url[0] == '\0') {
+        const char *err = "{\"error\":\"missing url\"}";
+        ws_send_text(client_fd, err, strlen(err));
+        return;
+    }
+
+    free(pending_navigate_url);
+    pending_navigate_url = strdup(url);
+    pending_navigate_client_fd = client_fd;
+
+    /* Response wird gesendet nachdem main.c die Navigation durchgefuehrt hat */
+}
+
+/* ---- JSON String-Feld extrahieren ---- */
+
+static int json_extract_string(const char *msg, const char *key,
+                               char *out, size_t out_size)
+{
+    const char *p = strstr(msg, key);
+    if (!p) return -1;
+    p = strchr(p + strlen(key), '"');
+    if (!p) return -1;
+    p++;
+    const char *end = strchr(p, '"');
+    if (!end) return -1;
+    size_t len = (size_t)(end - p);
+    if (len >= out_size) len = out_size - 1;
+    memcpy(out, p, len);
+    out[len] = '\0';
+    return 0;
+}
+
 /* ---- Message Handler ---- */
 
 static void handle_message(int client_fd, const char *msg)
@@ -235,22 +275,13 @@ static void handle_message(int client_fd, const char *msg)
     }
 
     if (strstr(msg, "\"screenshot\"")) {
-        const char *p = strstr(msg, "\"path\"");
         char path[512] = "/tmp";
-        if (p) {
-            p = strchr(p + 6, '"');
-            if (p) {
-                p++;
-                const char *end = strchr(p, '"');
-                if (end) {
-                    size_t len = (size_t)(end - p);
-                    if (len >= sizeof(path)) len = sizeof(path) - 1;
-                    memcpy(path, p, len);
-                    path[len] = '\0';
-                }
-            }
-        }
+        json_extract_string(msg, "\"path\"", path, sizeof(path));
         cmd_screenshot(client_fd, path);
+    } else if (strstr(msg, "\"navigate\"")) {
+        char url[2048] = "";
+        json_extract_string(msg, "\"url\"", url, sizeof(url));
+        cmd_navigate(client_fd, url);
     } else {
         const char *err = "{\"error\":\"unknown command\"}";
         ws_send_text(client_fd, err, strlen(err));
@@ -430,6 +461,24 @@ void debug_server_poll(void)
     }
 }
 
+char *debug_server_consume_navigate(void)
+{
+    if (!pending_navigate_url) return NULL;
+
+    char *url = pending_navigate_url;
+    pending_navigate_url = NULL;
+
+    /* Bestaetigung an den Client senden */
+    if (pending_navigate_client_fd >= 0) {
+        char resp[2200];
+        snprintf(resp, sizeof(resp), "{\"ok\":true,\"url\":\"%s\"}", url);
+        ws_send_text(pending_navigate_client_fd, resp, strlen(resp));
+        pending_navigate_client_fd = -1;
+    }
+
+    return url;
+}
+
 void debug_server_stop(void)
 {
     for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -442,4 +491,6 @@ void debug_server_stop(void)
         close(server_fd);
         server_fd = -1;
     }
+    free(pending_navigate_url);
+    pending_navigate_url = NULL;
 }
